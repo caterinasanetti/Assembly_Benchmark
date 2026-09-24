@@ -1,0 +1,897 @@
+
+```{r}
+library(tidyverse)
+
+# 1. Unisci tutti e quattro i dataset in un unico dataframe master
+combined_gather_data <- bind_rows(
+  RCC_1808J_gather,
+  RCC154B_gather,
+  RCC1477_gather,
+  RCC_162_gather,
+  RCC1466_gather
+)
+
+# 2. Esegui la pipeline sui dati combinati e crea il grafico
+my_plot <- combined_gather_data %>%
+  # Pulisci la colonna 'name' per estrarre solo Genere e Specie
+  mutate(species_name = word(name, 2, 3)) %>%
+  
+  # Raggruppa per 'query_name' (che separa i 4 campioni) e specie
+  group_by(query_name, species_name) %>%
+  
+  # Collassa i ceppi prendendo il MASSIMO della 'median_abund'
+  summarise(true_abundance = max(median_abund), .groups = "drop") %>%
+  
+  # Filtra il rumore di fondo assoluto
+
+  # 3. Costruisci il grafico
+  # reorder_within ordina le barre correttamente all'interno di ogni pannello
+  ggplot(aes(x = tidytext::reorder_within(species_name, true_abundance, query_name), y = true_abundance)) +
+  
+  # Usa le colonne per rappresentare l'abbondanza
+  geom_col(alpha = 0.8, fill = "steelblue") +
+  
+  # Aggiungi la linea rossa tratteggiata per la soglia di contaminazione
+  geom_hline(yintercept = 10, linetype = "dashed", color = "red", linewidth = 1) +
+  
+  # Ruota le coordinate per leggere i nomi delle specie
+  coord_flip() +
+  
+  # Rimuove i nomi dei campioni aggiunti da reorder_within dalle etichette degli assi
+  tidytext::scale_x_reordered() +
+  
+  # Scala logaritmica per l'asse Y (che visivamente diventa l'asse orizzontale)
+  ylim(0, 4000) + 
+  
+  # DIVIDI PER CAMPIONE E IMPILA VERTICALMENTE (ncol = 1 invece di nrow = 1)
+  facet_wrap(~ query_name, ncol = 1, scales = "free_y") +
+  
+  # Pulisci le etichette e il tema
+  theme_bw() +
+  labs(
+    title = "Profili di Abbondanza delle Specie (Isolati vs Contaminati)",
+    x = "Specie",
+    y = "Profondità di Sequenziamento (Max median_abund)"
+  )
+
+# Mostra il grafico su schermo
+print(my_plot)
+
+# SUGGERIMENTO: Poiché ci sono 4 grafici impilati, potrebbero sembrare schiacciati
+# nel viewer di RStudio. Usa questo comando per salvare un'immagine ad alta risoluzione 
+# dando abbastanza "altezza" (height) al file:
+# ggsave("profili_abbondanza.png", plot = my_plot, width = 10, height = 12, dpi = 300)
+```
+
+```{r}
+library(tidyverse)
+library(tidytext) 
+
+# 1. LOAD YOUR DATA
+df <- bind_rows(RCC1477_species_summary, RCC1808J_csv_summarized , species_summary_csv_summarized,RCC1466_csv_summarized,RCC162_csv_summarized, RCC312_csv_summarized , RCC1714_csv_summarized)
+plot_data <- df %>%
+  filter(rank == "species") %>%
+  mutate(
+    clean_species = case_when(
+      lineage == "unclassified" ~ "Unclassified",
+      TRUE ~ str_replace(str_extract(lineage, "s__.*$"), "s__", "")
+    )
+  ) %>%
+  mutate(
+    clean_species = if_else(f_weighted_at_rank < 0.01, "Other (< 1%)", clean_species)
+  ) %>%
+  group_by(query_name, clean_species) %>%
+  summarize(f_weighted_at_rank = sum(f_weighted_at_rank), .groups = "drop") %>%
+  
+  filter(clean_species != "Unclassified")
+
+ggplot(plot_data, aes(
+    x = f_weighted_at_rank, 
+    y = reorder_within(clean_species, f_weighted_at_rank, query_name), 
+    fill = clean_species
+  )) +
+  
+  geom_vline(xintercept = 0.05, linetype = "dashed", color = "red", linewidth = 0.8) +
+  
+  geom_col(color = "black", linewidth = 0.2) + 
+  facet_wrap(~ query_name, scales = "free", ncol = 1) + 
+  
+  # Lock the X-axis from 0 to 1 (100%) so the 95% line is always in the same place
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_y_reordered() + 
+  scale_fill_brewer(palette = "Set2") +
+  
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 10, face = "bold"), 
+    axis.title = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", size = 16),
+    legend.position = "none", 
+    panel.spacing = unit(1, "lines"), 
+    strip.text = element_text(face = "bold", size = 12) 
+  )
+```
+```{r}
+library(tidyverse)
+
+# 1. FIXED: Removed "row_index" so there are exactly 9 columns
+col_names <- c("contig_name", "start", "length", "reads_mapped", 
+               "covered_bases", "percent_coverage", "mean_depth", "mean_base_q", "mean_map_q")
+
+df <- read_tsv("RCC1808j_covarage_stats.csv", col_names = col_names, skip = 1, show_col_types = FALSE)
+
+ggplot(df, aes(
+    x = reorder(contig_name, -length), 
+    y = mean_depth
+  )) +
+  
+  # Draw the dots
+  geom_point(aes(size = percent_coverage, fill = percent_coverage), 
+             shape = 21, color = "black", alpha = 0.8) +
+  
+  scale_fill_distiller(palette = "RdYlBu", direction = 1, limits = c(0, 100)) +
+  
+  # Log scale for depth
+  scale_y_log10(labels = scales::comma) +
+  
+  labs(
+    title = "Contig Name vs. Sequencing Depth",
+    x = "Contig Name",
+    y = "Mean Depth (x, Log10 Scale)",
+    fill = "Coverage (%)",
+    size = "Coverage (%)"
+  ) +
+  
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8),
+    
+    plot.title = element_text(face = "bold", size = 16),
+    axis.title = element_text(face = "bold"),
+    legend.position = "right"
+  )
+```
+
+```{r}
+library(tidyverse)
+
+# 1. FIXED: Removed "row_index" so there are exactly 9 columns
+col_names <- c("contig_name", "start", "length", "reads_mapped", 
+               "covered_bases", "percent_coverage", "mean_depth", "mean_base_q", "mean_map_q")
+
+df <- read_tsv("RCC154B_alignment_bifidobacterium.sorted_covstats.txt", col_names = col_names, skip = 1, show_col_types = FALSE)
+
+ggplot(df, aes(
+    x = reorder(contig_name, -length), 
+    y = mean_depth
+  )) +
+  
+  # Draw the dots
+  geom_point(aes(size = percent_coverage, fill = percent_coverage), 
+             shape = 21, color = "black", alpha = 0.8) +
+  
+  scale_fill_distiller(palette = "RdYlBu", direction = 1, limits = c(0, 100)) +
+  
+  # Log scale for depth
+  scale_y_log10(labels = scales::comma) +
+  
+  labs(
+    title = "Contig Name vs. Sequencing Depth",
+    x = "Contig Name",
+    y = "Mean Depth (x, Log10 Scale)",
+    fill = "Coverage (%)",
+    size = "Coverage (%)"
+  ) +
+  
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8),
+    
+    plot.title = element_text(face = "bold", size = 16),
+    axis.title = element_text(face = "bold"),
+    legend.position = "right"
+  )
+```
+```{r}
+library(tidyverse)
+
+# 1. FIXED: Removed "row_index" so there are exactly 9 columns
+col_names <- c("contig_name", "start", "length", "reads_mapped", 
+               "covered_bases", "percent_coverage", "mean_depth", "mean_base_q", "mean_map_q")
+
+df <- read_tsv("RCC154B_alignment.sorted_covstats.txt", col_names = col_names, skip = 1, show_col_types = FALSE)
+
+ggplot(df, aes(
+    x = reorder(contig_name, -length), 
+    y = mean_depth
+  )) +
+  
+  # Draw the dots
+  geom_point(aes(size = percent_coverage, fill = percent_coverage), 
+             shape = 21, color = "black", alpha = 0.8) +
+  
+  scale_fill_distiller(palette = "RdYlBu", direction = 1, limits = c(0, 100)) +
+  
+  # Log scale for depth
+  scale_y_log10(labels = scales::comma) +
+  
+  labs(
+    title = "Contig Name vs. Sequencing Depth",
+    x = "Contig Name",
+    y = "Mean Depth (x, Log10 Scale)",
+    fill = "Coverage (%)",
+    size = "Coverage (%)"
+  ) +
+  
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8),
+    
+    plot.title = element_text(face = "bold", size = 16),
+    axis.title = element_text(face = "bold"),
+    legend.position = "right"
+  )
+```
+
+
+```{r}
+library(tidyverse)
+# install.packages("ggrepel") if not already installed
+library(ggrepel)
+quast <- read_tsv("assembly_benchmark.tsv")
+
+quast_long <- quast %>%
+  pivot_longer(-Assembly, names_to = "sample", values_to = "value") %>%
+  pivot_wider(names_from = Assembly, values_from = value) %>%
+  mutate(across(-sample, ~ suppressWarnings(as.numeric(.))))
+
+quast_long <- quast_long %>%
+  mutate(method = case_when(
+    str_detect(sample, "shovill") ~ "shovill",
+    str_detect(sample, "seqkit")  ~ "seqkit",
+    str_detect(sample, "bbnorm")  ~ "bbnorm",
+    sample == "megahit"           ~ "megahit",
+    TRUE ~ "other"
+  ))
+
+key_metrics <- c("# contigs", "Genome fraction (%)", "NGA50",
+                  "# misassemblies", "# mismatches per 100 kbp",
+                  "Duplication ratio")
+
+plot_df <- quast_long %>%
+  select(sample, method, all_of(key_metrics)) %>%
+  pivot_longer(all_of(key_metrics), names_to = "metric", values_to = "value")
+
+p1 <- ggplot(plot_df, aes(x = reorder(sample, value), y = value, fill = method)) +
+  geom_col() +
+  facet_wrap(~metric, scales = "free", ncol = 2) +
+  coord_flip() +
+  labs(x = NULL, y = NULL, title = "QUAST comparison — key metrics") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "top")
+p1
+
+##ggsave("quast_key_metrics.png", p1, width = 10, height = 8, dpi = 300)
+
+# --- Plot 2: contiguity vs. accuracy trade-off ---------------------------
+# This is usually the more decisive view: assemblies in the top-left
+# (high NGA50, low misassemblies) are the strongest candidates.
+p2 <- ggplot(quast_long,
+              aes(x = NGA50, y = `# misassemblies`,
+                  color = method, size = `Genome fraction (%)`)) +
+  geom_point(alpha = 0.85) +
+  geom_text_repel(aes(label = sample), size = 3, show.legend = FALSE) +
+  labs(x = "NGA50 (bp) — higher = more contiguous",
+       y = "# misassemblies — lower = more accurate",
+       size = "Genome fraction (%)",
+       title = "Contiguity vs. accuracy trade-off") +
+  theme_minimal(base_size = 11)
+p2
+#ggsave("quast_tradeoff.png", p2, width = 8, height = 6, dpi = 300)
+
+```
+```{r}
+library(tidyverse)
+
+quast <- read_tsv("assembly_benchmark.tsv")
+
+quast_long <- quast %>%
+  pivot_longer(-Assembly, names_to = "sample", values_to = "value") %>%
+  mutate(
+    method = case_when(
+      str_detect(sample, "shovill") ~ "shovill",
+      str_detect(sample, "seqkit")  ~ "seqkit",
+      str_detect(sample, "bbnorm")  ~ "bbnorm",
+      sample == "megahit"           ~ "megahit",
+      TRUE ~ "other"
+    ),
+    # pulls the leading number out of each cell -> handles "-" (NA50/NGA90 etc,
+    # becomes NA) and composite values like "8 + 23 part" (becomes 8) in one go
+    value = as.numeric(str_extract(value, "^-?[0-9.]+"))
+  ) %>%
+  drop_na(value)
+
+ggplot(quast_long, aes(x = sample, y = value, color = method)) +
+  geom_point(size = 1.6) +
+  facet_wrap(~ Assembly, scales = "free_y", ncol = 6) +
+  labs(x = NULL, y = NULL, color = NULL) +
+  theme_minimal(base_size = 8) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.text = element_text(size = 6.5, face = "bold"),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(0.6, "lines"),
+    legend.position = "bottom"
+  )
+
+```
+```{r}
+library(tidyverse)
+
+quast <- read_tsv("assembly_benchmark.tsv")
+
+quast_long <- quast %>%
+  pivot_longer(-Assembly, names_to = "sample", values_to = "value") %>%
+  mutate(
+    method = case_when(
+      str_detect(sample, "shovill") ~ "shovill",
+      str_detect(sample, "seqkit")  ~ "seqkit",
+      str_detect(sample, "bbnorm")  ~ "bbnorm",
+      sample == "megahit"           ~ "megahit",
+      TRUE ~ "other"
+    ),
+    # pulls the leading number out of each cell -> handles "-" (NA50/NGA90 etc,
+    # becomes NA) and composite values like "8 + 23 part" (becomes 8) in one go
+    value = as.numeric(str_extract(value, "^-?[0-9.]+"))
+  ) %>%
+  drop_na(value)
+
+# Reference length and Reference GC (%) are excluded below: they're constant
+# across every assembly (same reference used for all), so they carry no
+# comparative signal.
+
+contiguity_metrics <- c(
+  "# contigs (>= 0 bp)", "# contigs (>= 1000 bp)", "# contigs (>= 5000 bp)",
+  "# contigs (>= 10000 bp)", "# contigs (>= 25000 bp)", "# contigs (>= 50000 bp)",
+  "# contigs", "Largest contig",
+  "Total length (>= 0 bp)", "Total length (>= 1000 bp)", "Total length (>= 5000 bp)",
+  "Total length (>= 10000 bp)", "Total length (>= 25000 bp)", "Total length (>= 50000 bp)",
+  "Total length",
+  "N50", "NG50", "N90", "NG90", "auN", "auNG", "L50", "LG50", "L90", "LG90"
+)
+
+accuracy_metrics <- c(
+  "# misassemblies", "# misassembled contigs", "Misassembled contigs length",
+  "# local misassemblies", "# scaffold gap ext. mis.", "# scaffold gap loc. mis.",
+  "# unaligned mis. contigs", "# mismatches per 100 kbp", "# indels per 100 kbp",
+  "# N's per 100 kbp", "GC (%)"
+)
+
+alignment_metrics <- c(
+  "Genome fraction (%)", "Duplication ratio", "# unaligned contigs", "Unaligned length",
+  "Largest alignment", "Total aligned length",
+  "NA50", "NGA50", "NA90", "NGA90", "auNA", "auNGA", "LA50", "LGA50", "LA90", "LGA90"
+)
+
+plot_metric_group <- function(df, metrics, ncol = 4) {
+  ggplot(filter(df, Assembly %in% metrics), aes(x = sample, y = value, color = method)) +
+    geom_point(size = 1.8) +
+    facet_wrap(~ Assembly, scales = "free_y", ncol = ncol) +
+    labs(x = NULL, y = NULL, color = NULL) +
+    theme_minimal(base_size = 9) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      strip.text = element_text(size = 7.5, face = "bold"),
+      panel.grid.minor = element_blank(),
+      panel.spacing = unit(0.6, "lines"),
+      legend.position = "bottom"
+    )
+}
+
+plot_metric_group(quast_long, contiguity_metrics, ncol = 5)
+
+plot_metric_group(quast_long, accuracy_metrics, ncol = 4)
+
+plot_metric_group(quast_long, alignment_metrics, ncol = 4)
+
+```
+```{r}
+library(tidyverse)
+
+# ---- 1. Read all three TSVs and tag each with its genome sample name -----
+# NOTE: adjust the filename/label for Sample 3 to match your actual file.
+
+quast_1 <- read_tsv("assembly_benchmark.tsv") %>%
+  mutate(genome_sample = "Sample 1")
+
+quast_2 <- read_tsv("assembly_benchmarkRCC162.tsv") %>%
+  mutate(genome_sample = "Sample 2")
+
+quast_3 <- read_tsv("assembly_benchmarkRCC312.tsv") %>%
+  mutate(genome_sample = "Sample 3")
+
+quast <- bind_rows(quast_1, quast_2, quast_3)
+
+# ---- 2. Reshape to long format --------------------------------------------
+# Note: `sample` here is your assembler/depth column (e.g. "seqkit_100x"),
+# NOT the genome sample. Keep that naming as-is so the rest of your pipeline
+# still works; `genome_sample` is the new axis we're adding.
+
+quast_long <- quast %>%
+  pivot_longer(-c(Assembly, genome_sample), names_to = "sample", values_to = "value") %>%
+  mutate(
+    method = case_when(
+      str_detect(sample, "shovill") ~ sample,
+      str_detect(sample, "seqkit")  ~ sample,
+      str_detect(sample, "bbnorm")  ~ sample,
+      sample == "megahit"           ~ "megahit",
+      TRUE ~ "other"
+    ),
+    value = as.numeric(str_extract(value, "^-?[0-9.]+"))
+  ) %>%
+  drop_na(value)
+
+# ---- 3. Metric groupings (unchanged from your original script) -----------
+
+contiguity_metrics <- c(
+  "# contigs (>= 0 bp)", "# contigs (>= 1000 bp)", "# contigs (>= 5000 bp)",
+  "# contigs (>= 10000 bp)", "# contigs (>= 25000 bp)", "# contigs (>= 50000 bp)",
+  "# contigs", "Largest contig",
+  "Total length (>= 0 bp)", "Total length (>= 1000 bp)", "Total length (>= 5000 bp)",
+  "Total length (>= 10000 bp)", "Total length (>= 25000 bp)", "Total length (>= 50000 bp)",
+  "Total length",
+  "N50", "NG50", "N90", "NG90", "auN", "auNG", "L50", "LG50", "L90", "LG90"
+)
+
+accuracy_metrics <- c(
+  "# misassemblies", "# misassembled contigs", "Misassembled contigs length",
+  "# local misassemblies", "# scaffold gap ext. mis.", "# scaffold gap loc. mis.",
+  "# unaligned mis. contigs", "# mismatches per 100 kbp", "# indels per 100 kbp",
+  "# N's per 100 kbp", "GC (%)"
+)
+
+alignment_metrics <- c(
+  "Genome fraction (%)", "Duplication ratio", "# unaligned contigs", "Unaligned length",
+  "Largest alignment", "Total aligned length",
+  "NA50", "NGA50", "NA90", "NGA90", "auNA", "auNGA", "LA50", "LGA50", "LA90", "LGA90"
+)
+
+ref_df <- quast_all %>%
+  distinct(genome_sample, `Reference length`, `Reference GC (%)`) %>%
+  pivot_longer(
+    cols = c(`Reference length`, `Reference GC (%)`),
+    names_to = "Assembly", values_to = "ref_value"
+  ) %>%
+  mutate(Assembly = recode(Assembly,
+                            "Reference length"   = "Total length",
+                            "Reference GC (%)"   = "GC (%)"),
+         Assembly = factor(Assembly, levels = core_metrics))
+
+# ---- 4. Plotting function: facet_grid(Assembly ~ genome_sample) ----------
+# Rows = metric, Columns = genome sample. With a third sample this now
+# produces three columns per metric row, so you can compare all three
+# samples at a glance for every metric while still seeing per-assembler
+# spread within each sample.
+
+plot_metric_group <- function(df, metrics, ncol_metrics = 4) {
+  ggplot(filter(df, Assembly %in% metrics),
+         aes(x = method, y = value, color = method)) +
+    geom_point(size = 1.8) +
+    facet_grid(Assembly ~ genome_sample, scales = "free_y") +
+    labs(x = NULL, y = NULL, color = NULL) +
+    theme_minimal(base_size = 9) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      strip.text.y = element_text(size = 7, face = "bold", angle = 0),
+      strip.text.x = element_text(size = 9, face = "bold"),
+      panel.grid.minor = element_blank(),
+      panel.spacing = unit(0.5, "lines"),
+      legend.position = "bottom"
+    )
+}
+
+plot_metric_group_overlay <- function(df, metrics, ncol = 4) {
+  ggplot(filter(df, Assembly %in% metrics),
+         aes(x = sample, y = value, color = method, shape = genome_sample)) +
+    geom_point(size = 1.8) +
+    facet_wrap(~ Assembly, scales = "free_y", ncol = ncol) +
+    labs(x = NULL, y = NULL, color = NULL, shape = "Genome sample") +
+    theme_minimal(base_size = 9) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      strip.text = element_text(size = 7.5, face = "bold"),
+      panel.grid.minor = element_blank(),
+      panel.spacing = unit(0.6, "lines"),
+      legend.position = "bottom"
+    )
+}
+
+plot_metric_group_overlay(quast_long, contiguity_metrics, ncol = 5)
+ggsave("quast_contiguity_overlay.png", p_contiguity_overlay, width = 16, height = 10, dpi = 300)
+
+plot_metric_group_overlay(quast_long, accuracy_metrics, ncol = 4)
+ggsave("quast_accuracy_overlay.png", p_accuracy_overlay, width = 13, height = 8, dpi = 300)
+
+plot_metric_group_overlay(quast_long, alignment_metrics, ncol = 4)
+ggsave("quast_alignment_overlay.png", p_alignment_overlay, width = 13, height = 10, dpi = 300)
+```
+```{r}
+library(tidyverse)
+
+# ---- 1. Read all three TSVs, tag with genome sample, compute derived metrics ----
+
+read_and_derive <- function(path, sample_label) {
+  read_tsv(path) %>%
+    pivot_longer(-Assembly, names_to = "sample", values_to = "value") %>%
+    pivot_wider(names_from = Assembly, values_from = value) %>%
+    mutate(across(-sample, ~ suppressWarnings(as.numeric(.)))) %>%
+    mutate(
+      method = case_when(
+        str_detect(sample, "shovill") ~ sample,
+        str_detect(sample, "seqkit")  ~ sample,
+        str_detect(sample, "bbnorm")  ~ sample,
+        sample == "megahit"           ~ "megahit",
+        TRUE ~ "other"
+      ),
+      `Aligned fraction (%)`           = 100 * `Total aligned length` / `Total length`,
+      `Misassemblies / 100 Mb aligned` = `# misassemblies` * 100 / (`Total aligned length` / 1e6),
+      genome_sample = sample_label
+    )
+}
+
+quast_1 <- read_and_derive("assembly_benchmark.tsv", "Sample 1")
+quast_2 <- read_and_derive("assembly_benchmarkRCC162.tsv", "Sample 2")
+quast_3 <- read_and_derive("assembly_benchmarkRCC312.tsv", "Sample 3")
+
+quast_all <- bind_rows(quast_1, quast_2, quast_3)
+
+core_metrics <- c(
+  "NGA50",
+  "Genome fraction (%)",
+  "Aligned fraction (%)",
+  "Misassemblies / 100 Mb aligned",
+  "# mismatches per 100 kbp",
+  "# indels per 100 kbp",
+  "Duplication ratio",
+  "Total length",
+  "GC (%)"
+)
+
+quast_long <- quast_all %>%
+  select(sample, method, genome_sample, all_of(core_metrics)) %>%
+  pivot_longer(all_of(core_metrics), names_to = "Assembly", values_to = "value") %>%
+  mutate(Assembly = factor(Assembly, levels = core_metrics))
+
+# ---- 3. Reference values (one per genome sample), reshaped to match the
+#          "Total length" / "GC (%)" facets so geom_hline lands on the right panel ----
+ref_df <- quast_all %>%
+  distinct(genome_sample, `Reference length`, `Reference GC (%)`) %>%
+  pivot_longer(
+    cols = c(`Reference length`, `Reference GC (%)`),
+    names_to = "Assembly", values_to = "ref_value"
+  ) %>%
+  mutate(Assembly = recode(Assembly,
+                            "Reference length"   = "Total length",
+                            "Reference GC (%)"   = "GC (%)"),
+         Assembly = factor(Assembly, levels = core_metrics))
+
+# ---- 4. Overlay plot ----
+p_core_overlay <- ggplot(quast_long,
+       aes(x = sample, y = value, color = method, shape = genome_sample)) +
+  geom_point(size = 2) +
+  geom_hline(
+    data = ref_df,
+    aes(yintercept = ref_value, linetype = genome_sample),
+    inherit.aes = FALSE, color = "grey30", linewidth = 0.6
+  ) +
+  facet_wrap(~ Assembly, scales = "free_y", ncol = 2) +
+  labs(x = NULL, y = NULL, color = NULL,
+       shape = "Genome sample", linetype = "Genome sample",
+       title = "Core reference-based assembly benchmarking metrics — overlay across samples") +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.text = element_text(size = 9, face = "bold"),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(0.6, "lines"),
+    legend.position = "bottom"
+  )
+
+p_core_overlay
+
+# ggsave("quast_core_overlay.png", p_core_overlay, width = 12, height = 10, dpi = 300)
+```
+```{r}
+library(tidyverse)
+
+# ---- 1. Read all three TSVs and tag each with its genome sample name -----
+quast_1 <- read_tsv("report.tsv", show_col_types = FALSE) %>%
+  mutate(genome_sample = "Sample 1")
+
+quast_2 <- read_tsv("assembly_benchmarkRCC162.tsv", show_col_types = FALSE) %>%
+  mutate(genome_sample = "Sample 2")
+
+quast_3 <- read_tsv("assembly_benchmarkRCC312.tsv", show_col_types = FALSE) %>%
+  mutate(genome_sample = "Sample 3")
+
+quast <- bind_rows(quast_1, quast_2, quast_3)
+
+# ---- 2. Reshape to long format --------------------------------------------
+quast_long <- quast %>%
+  pivot_longer(-c(Assembly, genome_sample), names_to = "sample", values_to = "value") %>%
+  mutate(
+    method = case_when(
+      str_detect(sample, "shovill") ~ sample,
+      str_detect(sample, "seqkit")  ~ sample,
+      str_detect(sample, "bbnorm")  ~ sample,
+      sample == "megahit"           ~ "megahit",
+      TRUE ~ "other"
+    ),
+    value = as.numeric(str_extract(value, "^-?[0-9.]+"))
+  ) %>%
+  drop_na(value)
+
+# ---- 3. Metric groupings --------------------------------------------------
+contiguity_metrics <- c(
+  "# contigs", "Largest contig",
+  "Total length")
+
+accuracy_metrics <- c(
+  "# misassemblies", "# misassembled contigs", "Misassembled contigs length",
+  "# local misassemblies", "# scaffold gap ext. mis.", "# scaffold gap loc. mis.",
+  "# unaligned mis. contigs", "# mismatches per 100 kbp", "# indels per 100 kbp",
+  "# N's per 100 kbp", "GC (%)"
+)
+
+alignment_metrics <- c(
+  "Genome fraction (%)", "Duplication ratio", "# unaligned contigs", "Unaligned length",
+  "Largest alignment", "Total aligned length",
+  "NA50", "NGA50", "NA90", "NGA90", "auNA", "auNGA", "LA50", "LGA50", "LA90", "LGA90"
+)
+
+
+ref_df <- quast_long %>%
+  filter(Assembly %in% c("Reference length", "Reference GC (%)")) %>%
+  distinct(genome_sample, Assembly, value) %>%
+  select(genome_sample, Assembly, ref_value = value) %>%
+  mutate(Assembly = recode(Assembly,
+                           "Reference length"   = "Total length",
+                           "Reference GC (%)"   = "GC (%)")) %>%
+  drop_na(ref_value)
+
+plot_metric_group_overlay <- function(df, metrics, ref_data, ncol = 4) {
+  
+  plot_data <- filter(df, Assembly %in% metrics)
+  current_refs <- filter(ref_data, Assembly %in% metrics)
+  
+  p <- ggplot(plot_data, aes(x = sample, y = value, color = method, shape = genome_sample)) +
+    geom_point(size = 1.8, alpha = 0.8) +
+    facet_wrap(~ Assembly, scales = "free_y", ncol = ncol) +
+    labs(x = NULL, y = NULL, color = NULL, shape = "Genome sample", linetype = "Genome sample") +
+    theme_minimal(base_size = 9) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      strip.text = element_text(size = 7.5, face = "bold"),
+      panel.grid.minor = element_blank(),
+      panel.spacing = unit(0.6, "lines"),
+      legend.position = "bottom"
+    )
+  
+  if (nrow(current_refs) > 0) {
+    p <- p + geom_hline(
+      data = current_refs,
+      aes(yintercept = ref_value, linetype = genome_sample),
+      color = "red", linewidth = 0.8, alpha = 0.6
+    )
+  }
+  
+  return(p)
+}
+
+
+# 1. Contiguity 
+p_contiguity_overlay <- plot_metric_group_overlay(quast_long, contiguity_metrics, ref_df, ncol = 5)
+print(p_contiguity_overlay)
+ggsave("quast_contiguity_overlay.png", p_contiguity_overlay, width = 16, height = 10, dpi = 300)
+
+# 2. Accuracy 
+p_accuracy_overlay <- plot_metric_group_overlay(quast_long, accuracy_metrics, ref_df, ncol = 4)
+print(p_accuracy_overlay)
+ggsave("quast_accuracy_overlay.png", p_accuracy_overlay, width = 13, height = 8, dpi = 300)
+
+# 3. Alignment 
+p_alignment_overlay <- plot_metric_group_overlay(quast_long, alignment_metrics, ref_df, ncol = 4)
+print(p_alignment_overlay)
+ggsave("quast_alignment_overlay.png", p_alignment_overlay, width = 13, height = 10, dpi = 300)
+```
+```{r}
+#   NGA50 (falls back to NA50 if missing)              -> higher is better
+#   Genome fraction (%)                                 -> higher is better
+#   Aligned assembly fraction (Total aligned length
+#       / Total length)                                 -> higher is better
+#   Misassemblies per 100 Mb                             -> lower is better
+#   Mismatches + indels per 100 kbp                       -> lower is better
+#   Duplication ratio (deviation from 1)                   -> lower is better
+#   Total length vs Reference length (deviation from 1)      -> lower is better
+#
+# SCORING
+#   For each of the 7 metrics above, whichever assembler has the best value
+#   (accounting for direction) wins 1 point for that category (ties all
+#   get a point). Points are summed across all 7 categories, and the
+#   assembler with the most points overall is reported as the winner.
+#
+```
+
+
+```{r}
+input_file <- "assembly_benchmarkRCC762.tsv"   # <-- change this to your file's path
+metric_col <- "Assembly"              # column holding QUAST metric names
+
+
+sep <- if (grepl("\\.tsv$", input_file, ignore.case = TRUE)) "\t" else ","
+df <- read.delim(input_file, sep = sep, stringsAsFactors = FALSE,
+                  check.names = FALSE)
+
+if (!(metric_col %in% names(df))) {
+  stop("Couldn't find a '", metric_col, "' column. Found: ",
+       paste(names(df), collapse = ", "))
+}
+
+asm_cols <- setdiff(names(df), metric_col)
+
+row_nga50 <- df[df[[metric_col]] == "NGA50", asm_cols]
+nga50 <- suppressWarnings(as.numeric(sub("\\s*\\+.*$", "", trimws(as.character(row_nga50[1, ])))))
+names(nga50) <- asm_cols
+
+row_na50 <- df[df[[metric_col]] == "NA50", asm_cols]
+na50 <- suppressWarnings(as.numeric(sub("\\s*\\+.*$", "", trimws(as.character(row_na50[1, ])))))
+names(na50) <- asm_cols
+nga50[is.na(nga50)] <- na50[is.na(nga50)]   
+
+row_gf <- df[df[[metric_col]] == "Genome fraction (%)", asm_cols]
+genome_fraction <- suppressWarnings(as.numeric(trimws(as.character(row_gf[1, ]))))
+names(genome_fraction) <- asm_cols
+
+row_tl <- df[df[[metric_col]] == "Total length", asm_cols]
+total_length <- suppressWarnings(as.numeric(trimws(as.character(row_tl[1, ]))))
+names(total_length) <- asm_cols
+
+row_rl <- df[df[[metric_col]] == "Reference length", asm_cols]
+reference_length <- suppressWarnings(as.numeric(trimws(as.character(row_rl[1, ]))))
+names(reference_length) <- asm_cols
+
+row_tal <- df[df[[metric_col]] == "Total aligned length", asm_cols]
+total_aligned_length <- suppressWarnings(as.numeric(trimws(as.character(row_tal[1, ]))))
+names(total_aligned_length) <- asm_cols
+
+row_mis <- df[df[[metric_col]] == "# misassemblies", asm_cols]
+n_misassemblies <- suppressWarnings(as.numeric(trimws(as.character(row_mis[1, ]))))
+names(n_misassemblies) <- asm_cols
+
+row_mm <- df[df[[metric_col]] == "# mismatches per 100 kbp", asm_cols]
+mismatches_100kbp <- suppressWarnings(as.numeric(trimws(as.character(row_mm[1, ]))))
+names(mismatches_100kbp) <- asm_cols
+
+row_indel <- df[df[[metric_col]] == "# indels per 100 kbp", asm_cols]
+indels_100kbp <- suppressWarnings(as.numeric(trimws(as.character(row_indel[1, ]))))
+names(indels_100kbp) <- asm_cols
+
+row_dup <- df[df[[metric_col]] == "Duplication ratio", asm_cols]
+duplication_ratio <- suppressWarnings(as.numeric(trimws(as.character(row_dup[1, ]))))
+names(duplication_ratio) <- asm_cols
+
+aligned_fraction        <- total_aligned_length / total_length
+misassemblies_per_100Mb <- n_misassemblies / (total_length / 1e8)
+base_error_per_100kbp    <- mismatches_100kbp + indels_100kbp
+duplication_ratio_dev     <- abs(duplication_ratio - 1)
+length_vs_reference_dev      <- abs(total_length / reference_length - 1)
+
+points <- rep(0, length(asm_cols))
+names(points) <- asm_cols
+
+best_val <- suppressWarnings(max(nga50, na.rm = TRUE))
+winners <- names(nga50)[!is.na(nga50) & nga50 == best_val]
+points[winners] <- points[winners] + 1
+
+best_val <- suppressWarnings(max(genome_fraction, na.rm = TRUE))
+winners <- names(genome_fraction)[!is.na(genome_fraction) & genome_fraction == best_val]
+points[winners] <- points[winners] + 1
+
+best_val <- suppressWarnings(max(aligned_fraction, na.rm = TRUE))
+winners <- names(aligned_fraction)[!is.na(aligned_fraction) & aligned_fraction == best_val]
+points[winners] <- points[winners] + 1
+
+
+best_val <- suppressWarnings(min(misassemblies_per_100Mb, na.rm = TRUE))
+winners <- names(misassemblies_per_100Mb)[!is.na(misassemblies_per_100Mb) & misassemblies_per_100Mb == best_val]
+points[winners] <- points[winners] + 1
+
+best_val <- suppressWarnings(min(base_error_per_100kbp, na.rm = TRUE))
+winners <- names(base_error_per_100kbp)[!is.na(base_error_per_100kbp) & base_error_per_100kbp == best_val]
+points[winners] <- points[winners] + 1
+
+
+best_val <- suppressWarnings(min(duplication_ratio_dev, na.rm = TRUE))
+winners <- names(duplication_ratio_dev)[!is.na(duplication_ratio_dev) & duplication_ratio_dev == best_val]
+points[winners] <- points[winners] + 1
+
+best_val <- suppressWarnings(min(length_vs_reference_dev, na.rm = TRUE))
+winners <- names(length_vs_reference_dev)[!is.na(length_vs_reference_dev) & length_vs_reference_dev == best_val]
+points[winners] <- points[winners] + 1
+
+
+res <- data.frame(
+  Assembler                = asm_cols,
+  NGA50                    = nga50,
+  genome_fraction           = genome_fraction,
+  aligned_fraction           = round(aligned_fraction, 4),
+  misassemblies_per_100Mb     = round(misassemblies_per_100Mb, 1),
+  base_error_per_100kbp         = round(base_error_per_100kbp, 2),
+  duplication_ratio_dev           = round(duplication_ratio_dev, 4),
+  length_vs_reference_dev            = round(length_vs_reference_dev, 5),
+  Points                                = points,
+  row.names = NULL
+)
+res <- res[order(-res$Points), ]
+print(res, row.names = FALSE)
+
+best <- res[which.max(res$Points), ]
+cat(sprintf("\n>>> Best assembler: %s (%d / 7 categories won)\n",
+            best$Assembler, best$Points))
+
+out_file <- paste0(tools::file_path_sans_ext(basename(input_file)), "_scores.csv")
+write.csv(res, out_file, row.names = FALSE)
+cat("\nWrote:", out_file, "\n")
+```
+```{r}
+
+
+scores_dir   <- "."                    # folder containing the *_scores.csv files
+file_pattern <- "_scores\\.csv$"       # regex matching the per-sample score files
+
+
+score_files <- list.files(scores_dir, pattern = file_pattern, full.names = TRUE)
+
+
+all_points <- data.frame(Assembler = character(0), Sample = character(0),
+                          Points = numeric(0))
+
+for (f in score_files) {
+  df <- read.csv(f, stringsAsFactors = FALSE, check.names = FALSE)
+
+  if (!("Assembler" %in% names(df)) || !("Points" %in% names(df))) {
+    warning("Skipping '", basename(f), "': missing 'Assembler' or 'Points' column")
+    next
+  }
+
+  sample_name <- sub(file_pattern, "", basename(f))
+
+  all_points <- rbind(all_points, data.frame(
+    Assembler = df$Assembler,
+    Sample    = sample_name,
+    Points    = df$Points
+  ))
+}
+
+wide <- reshape(all_points, idvar = "Assembler", timevar = "Sample",
+                 direction = "wide")
+names(wide) <- sub("^Points\\.", "", names(wide))
+
+sample_cols <- setdiff(names(wide), "Assembler")
+wide$TotalPoints <- rowSums(wide[, sample_cols, drop = FALSE], na.rm = TRUE)
+
+wide <- wide[order(-wide$TotalPoints), ]
+
+print(wide, row.names = FALSE)
+
+best <- wide[which.max(wide$TotalPoints), ]
+cat(sprintf("\n>>> Overall best assembler: %s (%d total points across %d sample file(s))\n",
+            best$Assembler, best$TotalPoints, length(sample_cols)))
+```
+
